@@ -1,5 +1,6 @@
 import json
 from random import sample, shuffle
+import os
 
 from django.db import transaction
 from django.forms import ModelForm
@@ -11,7 +12,9 @@ from .models import *
 
 import redis
 
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=1)
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+redis_client = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=1)
 
 def add_log_msg(game, text, images=None):
     game.gamelog_set.create(text=text, images=images)
@@ -434,22 +437,24 @@ def add_player(request, game_id):
 def view_game(request, game_id, spirit_spec=None):
     game = get_object_or_404(Game, pk=game_id)
     if request.method == 'POST':
+        if 'spirit_spec' in request.POST:
+            spirit_spec = request.POST['spirit_spec']
         if 'screenshot' in request.FILES:
             form = GameForm(request.POST, request.FILES, instance=game)
             if form.is_valid():
                 form.save()
                 add_log_msg(game, text=f'New screenshot uploaded.', images='.' + game.screenshot.url)
-                return redirect(reverse('view_game', args=[game.id, spirit_spec]))
+                return redirect(reverse('view_game', args=[game.id, spirit_spec] if spirit_spec else [game.id]))
         if 'screenshot2' in request.FILES:
             form = GameForm2(request.POST, request.FILES, instance=game)
             if form.is_valid():
                 form.save()
                 add_log_msg(game, text=f'New screenshot uploaded.', images='.' + game.screenshot2.url)
-                return redirect(reverse('view_game', args=[game.id, spirit_spec]))
+                return redirect(reverse('view_game', args=[game.id, spirit_spec] if spirit_spec else [game.id]))
 
     tab_id = try_match_spirit(game, spirit_spec) or (game.gameplayer_set.first().id if game.gameplayer_set.exists() else None)
     logs = reversed(game.gamelog_set.order_by('-date').all()[:30])
-    return render(request, 'game.html', { 'game': game, 'logs': logs, 'tab_id': tab_id })
+    return render(request, 'game.html', { 'game': game, 'logs': logs, 'tab_id': tab_id, 'spirit_spec': spirit_spec })
 
 def try_match_spirit(game, spirit_spec):
     if not spirit_spec:
@@ -781,8 +786,10 @@ def gain_energy_on_impending(request, player_id):
         # There's no real harm in letting it exceed the cost
         # (the UI will still let you play it),
         # it's just that undoing it will require extra clicks on the -1.
-        # TODO: cost needs to be adjusted for fast cards in Blitz
-        impending.energy = min(impending.energy + to_gain, impending.card.cost)
+        impending.energy += to_gain
+        if impending.energy >= impending.cost_with_scenario:
+            impending.energy = impending.cost_with_scenario
+            impending.in_play = True
         impending.save()
     player.spirit_specific_per_turn_flags |= GamePlayer.SPIRIT_SPECIFIC_INCREMENTED_THIS_TURN
     player.save()
@@ -812,8 +819,7 @@ def add_energy_to_impending(request, player_id, card_id):
     player = get_object_or_404(GamePlayer, pk=player_id)
     card = get_object_or_404(player.impending_with_energy, pk=card_id)
     impending_with_energy = get_object_or_404(GamePlayerImpendingWithEnergy, gameplayer=player, card=card)
-    # TODO: cost needs to be adjusted for fast cards in Blitz
-    if not impending_with_energy.in_play and impending_with_energy.energy < card.cost:
+    if not impending_with_energy.in_play and impending_with_energy.energy < impending_with_energy.cost_with_scenario:
         impending_with_energy.energy += 1
         impending_with_energy.save()
 
@@ -835,8 +841,7 @@ def play_from_impending(request, player_id, card_id):
     player = get_object_or_404(GamePlayer, pk=player_id)
     card = get_object_or_404(player.impending_with_energy, pk=card_id)
     impending_with_energy = get_object_or_404(GamePlayerImpendingWithEnergy, gameplayer=player, card=card)
-    # TODO: cost needs to be adjusted for fast cards in Blitz
-    if not impending_with_energy.in_play and impending_with_energy.energy >= card.cost:
+    if not impending_with_energy.in_play and impending_with_energy.energy >= impending_with_energy.cost_with_scenario:
         impending_with_energy.in_play = True
         impending_with_energy.save()
 
