@@ -774,6 +774,10 @@ def compute_card_thresholds(player):
         if card.is_healing():
             card.computed_thresholds.extend(card.healing_thresholds(player.healing.count(), player.spirit_specific_resource_elements()))
         player.selection_cards.append(card)
+    # we could just unconditionally set this, but I guess we'll save a database query if they're not Dances Up Earthquakes.
+    player.computed_impending = player.gameplayerimpendingwithenergy_set.all() if player.spirit.name == 'Earthquakes' else []
+    for imp in player.computed_impending:
+        imp.card.computed_thresholds = imp.card.thresholds(player.elements, equiv_elements)
 
 def gain_energy_on_impending(request, player_id):
     player = get_object_or_404(GamePlayer, pk=player_id)
@@ -1015,7 +1019,6 @@ def change_energy(request, player_id, amount):
     player.energy += amount
     player.save()
 
-    compute_card_thresholds(player)
     return with_log_trigger(render(request, 'energy.html', {'player': player}))
 
 def pay_energy(request, player_id):
@@ -1025,7 +1028,6 @@ def pay_energy(request, player_id):
     player.paid_this_turn = True
     player.save()
 
-    compute_card_thresholds(player)
     return with_log_trigger(render(request, 'energy.html', {'player': player}))
 
 def gain_energy(request, player_id):
@@ -1035,7 +1037,6 @@ def gain_energy(request, player_id):
     player.gained_this_turn = True
     player.save()
 
-    compute_card_thresholds(player)
     return with_log_trigger(render(request, 'energy.html', {'player': player}))
 
 def change_spirit_specific_resource(request, player_id, amount):
@@ -1047,9 +1048,6 @@ def change_spirit_specific_resource(request, player_id, amount):
     elif amount < 0:
         player.spirit_specific_per_turn_flags |= GamePlayer.SPIRIT_SPECIFIC_DECREMENTED_THIS_TURN
     player.save()
-
-    # As of this writing, no resource affects card thresholds.
-    # compute_card_thresholds(player)
 
     # The spirit-specific resource is displayed in energy.html,
     # because some of them can change simultaneously with energy (e.g. Rot).
